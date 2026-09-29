@@ -1,87 +1,58 @@
 # CI/CD specification
 
-Status: verification, Docker Hub publication, WUD automatic replacement, rollback, and resume have been exercised. See [the evidence record](evidence.md).
+The original ARM64 demo is recorded in [evidence](evidence.md). The current pipeline extends it to native AMD64 and ARM64 delivery; see [integration evidence](integration-evidence.md) for validation status.
 
 ## Pipeline contract
 
-One initial GitHub Actions job named `verify` has clearly labeled steps:
+1. Two native jobs (`ubuntu-24.04` for AMD64 and `ubuntu-24.04-arm` for ARM64) install locked dependencies and run unit/integration tests.
+2. Each builds one release image with the exact Git commit and build timestamp, then runs Chromium E2E against that image on isolated port 18090.
+3. Each exports that image with `docker save` and records its image ID, architecture, OS, and tested commit. The image archive is not rebuilt in publication.
+4. The stable required check `verify` fails unless both jobs succeeded. Existing branch protection continues to require this name.
+5. Only a successful push to current `main` authenticates to Docker Hub. The publisher loads both archives, compares them with their test evidence and embedded release labels, and checks that main has not advanced.
+6. It pushes immutable-by-convention platform tags, creates one multi-platform commit index from their registry digests, rechecks main, and copies that index to `prod`.
 
-1. Check out the exact commit and install pinned test dependencies.
-2. Run unit tests.
-3. Run integration tests.
-4. Build the production image once, with commit SHA and UTC build time embedded.
-5. Start that image in an isolated container and wait for health.
-6. Run Chromium E2E tests against it; collect failure evidence and clean up.
-7. For a successful `main` push only, authenticate to Docker Hub and publish that same tested image.
+PRs and manual dispatch can verify but never publish. A PR run does not receive publishing credentials. Test/image artifacts are scoped to the current workflow run. Release image archives expire after two days; test and publication evidence after seven. Do not use `pull_request_target` to execute untrusted contributor code with secrets.
 
-Trigger on pull requests and pushes to `main`. Manual dispatch may run verification, but initially must not publish. A PR run must not receive publishing credentials. Do not use `pull_request_target` to run contributor code with secrets. A documentation-only path may skip expensive application work later, but must still report the required `verify` check; do not configure required checks that never appear.
+## Tags and identity
 
-Every stage is a gate. Failure before publication leaves the existing `:prod` tag and running production unchanged. Image publication itself is not atomic across two tags: publish the commit tag first and only then move `:prod`. An interrupted push can leave an unused commit-tagged image, which is acceptable; the production channel must never point at an untested artifact.
+| Reference | Meaning |
+|---|---|
+| `sha-<full-commit>-amd64` | Exact native AMD64 image tested for that commit |
+| `sha-<full-commit>-arm64` | Exact native ARM64 image tested for that commit |
+| `sha-<full-commit>` | Multi-platform index containing both tested images |
+| `prod` | Moving channel pointing at the latest promoted index |
+| `@sha256:...` | Immutable registry content identity (index or platform manifest) |
 
-## Tags and publishing
+All references use repository `kaw393939/is373_ci_cd`. Docker selects the appropriate platform from an index. The image ID used by the runtime is the local platform image's identity; it is not necessarily the registry index digest. Publication evidence records child manifests and the index so the distinction can be taught explicitly.
 
-| Tag | Meaning |
-| --- | --- |
-| `kaw393939/is373_ci_cd:sha-<full-commit>` | Release identity; do not overwrite an existing commit tag |
-| `kaw393939/is373_ci_cd:prod` | Most recent successfully promoted release |
+Tags are protected by project convention, not registry immutability. The publisher refuses a rerun if any commit tag already exists, including a partially uploaded platform release. Publish a new commit after diagnosing an interrupted release. Do not overwrite old evidence or silently rebuild for the same tag.
 
-Record the image digest in the workflow summary. A commit tag is immutable by project convention, not an automatic Docker Hub guarantee. On rerun, reuse/verify the original artifact or fail clearly instead of silently rebuilding and overwriting its commit tag. Deploy by recorded digest when exact artifact identity is required.
+Workflow concurrency serializes production releases without cancelling an in-progress push. A stale-main check runs before upload and again immediately before moving `prod`. Partial uploads may leave unused commit tags; a failed pre-promotion step leaves the existing production channel unchanged. A new main commit can still arrive immediately after the final check; the serialized newer run will follow. This is not a transaction across GitHub and Docker Hub.
 
-Serialize release workflows with one production concurrency group and no cancellation of an in-progress publication. Before promotion, verify that the run still represents the current `main` head, so stale runs or reruns cannot move `:prod` backward. PR runs can cancel superseded runs. An intentionally rolled-back production image is managed on the host with WUD paused, not by allowing old Actions runs to republish.
+## Credentials and architecture
 
-Use the existing `DOCKER_API_KEY` Actions secret for Docker Hub login as `kaw393939`. The secret must have push access to this repository; never commit or print it. The username/image name are not secrets. Use least-privilege Actions permissions (`contents: read` unless a specific step requires more), pin third-party actions to commit SHAs, and keep dependency versions reproducible.
+The publisher uses the existing `DOCKER_API_KEY` Actions secret. Keep it out of Git and logs. The pinned Python and WUD image indexes include both supported architectures. Local `make build` targets the Docker daemon's architecture unless `BUILD_PLATFORM` selects a supported override.
+
+The original demo tags are ARM64-only. New indexes support both architectures; do not promise AMD64 rollback to a historical tag without inspecting its manifest. The single-platform E2E images are tested natively, not merely built with emulation.
 
 ## Host-side deployment
 
-WUD runs beside production and polls Docker Hub for a changed digest behind `:prod`. Explicitly enable digest watching and restrict candidate tags to `prod`; tag-name comparison alone cannot detect replacement of a mutable tag. Use an opt-in policy so development, the updater itself, and unrelated containers are not updated.
+WUD polls the digest behind `prod`, filters candidates to that tag, and updates only the opted-in production container. Development, WUD itself, and unrelated hosting services are not opted in. The Docker trigger preserves the application's runtime configuration; confirm its network and Traefik labels during the public-update exercise.
 
-Target roughly one-minute checks for the demonstration, accounting for configured jitter and registry rate limits. Configure and test the chosen WUD version's trigger; monitoring alone is not deployment. Document a manual “check now” action for the demo. Pin WUD itself to a chosen release/digest.
+`make deploy` pulls the selected published image, starts production without development, checks its actual image/health identity, and starts WUD unless a pause marker exists. `make up` additionally builds/starts development. Every lifecycle command includes an optional local `compose.override.yaml`.
 
-The updater must preserve the production port, environment, health check, and restart policy. Validate that `dev` remains running with the same container identity when `prod` updates. See the [architecture decision](architecture.md#docker-compose-services) about Compose trigger behavior and host path mounts.
+WUD polls outward, so there is no server SSH credential in GitHub Actions. Private registry deployments need separate read credentials for host pulls and updater checks. A GitHub publishing secret does not configure the host automatically.
 
-WUD polls outward, so GitHub does not need inbound access to the host. No self-hosted GitHub runner or SSH deployment secret is required. If Docker Hub is private, both initial host pulls and WUD registry checks need read access configured outside Git. GitHub's push secret does not automatically exist on the deployment host.
+## Recovery
 
-## Bootstrap
+`make rollback RELEASE=sha-<full-commit>` or `RELEASE=sha256:<digest>` pauses WUD, persists the selected reference, pulls and recreates only production, and verifies the actual container image ID plus `/health` release identity. It leaves updates paused. Persisted release state overrides inherited shell `PROD_IMAGE`.
 
-1. Resolve deployment host, CPU architecture, Docker Hub visibility, and credentials.
-2. Implement and pass the local tests and container checks.
-3. Merge the pipeline and application; publish the first passing release to Docker Hub.
-4. Configure host pull credentials if required, then start the Compose services.
-5. Confirm `/health` and the footer on `8090` match the published release.
-6. Publish a second passing change and prove that WUD updates production without manual recreation.
+`make resume-updates` restores `prod`, verifies it, starts WUD, and clears the pause marker. Resuming while `prod` still points to a bad release deploys that release again. Bare Compose commands bypass the wrapper's release-state loading; use the Make interface.
 
-Development must start independently before step 3. Do not start production from a locally built fallback: that would hide whether registry-based deployment works.
-
-## Failure and rollback behavior
-
-| Failure | Expected behavior |
-| --- | --- |
-| Unit/integration/build/E2E | Job fails; no image promotion; previous release stays deployed |
-| Registry login or push | Workflow reports failure; inspect whether commit tag uploaded; do not assume production updated |
-| WUD stopped or registry unavailable | Existing production continues; deployment waits |
-| New container cannot start or is unhealthy | Deployment is failed, even if publication was green; operator rolls back |
-| Host asleep or Docker stopped | No service availability or updates until host resumes |
-
-A single production container has a brief interruption during recreation. Version 1 does not promise zero downtime or automatic health-based rollback.
-
-The implementation must provide `make rollback RELEASE=<sha-tag-or-digest>` that performs this sequence:
-
-1. Pause WUD updates before changing the production image.
-2. Select a known-good image by recorded digest or retained commit tag, using a documented local override.
-3. Pull and recreate **only** production.
-4. Check health and verify the previous commit on `8090`.
-5. Leave WUD paused, visibly documenting that state.
-
-A separate documented `make resume-updates` restores the `:prod` channel/clears the local override, then resumes the updater after the desired release is verified. Explain that resuming while `:prod` still points at the faulty release will deploy it again. These commands are implemented in `scripts/runtime.py`. Rollback accepts a `sha-<full-commit>` tag or `sha256:<digest>` from this repository. `make up` respects the persisted pause marker.
+A failed build/test cannot publish. An unhealthy replacement is a failed deployment even if publication succeeded; the operator performs rollback. A single production container has a brief interruption during recreation. Automatic health-based rollback and high availability remain out of scope.
 
 ## Completion evidence
 
-Record the workflow URL, commit, published digest, WUD update evidence, and `/health` response from `8090`. Measure the cold/cached pipeline durations and publication-to-deployment delay. Successful image publication alone does not close the deployment issue.
+For a release: record workflow URL, commit, index digest, child digests, and both native E2E results. For a deployment: additionally record the actual container image, updater event, and observed health commit. Public integration also requires trusted HTTPS and the expected public `/health` commit. Publication alone never proves deployment.
 
-## References
-
-- [Docker builds with GitHub Actions](https://docs.docker.com/build/ci/github-actions/)
-- [WUD digest monitoring](https://getwud.app/docs/configuration/watchers/)
-- [WUD Compose updates](https://getwud.app/docs/configuration/triggers/docker-compose/)
-
-The first ARM64 publication and second automatic deployment were both observed on the Docker Desktop host. WUD scans one opted-in container; its one-minute polling is for the demonstration. If registry checks are throttled, authenticate the registry or increase the interval. Stop the stack after the demo when it is not needed.
+References: [native multi-platform builds](https://docs.docker.com/build/ci/github-actions/multi-platform/), [manifest creation](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/), [WUD watchers](https://getwud.app/docs/configuration/watchers/), and [hosting handoff](hosting.md).

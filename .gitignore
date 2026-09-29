@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+compose.override.yaml
 
 # Python and tooling
 __pycache__/
@@ -25,3 +26,7 @@ artifacts/
 
 # Local operating-system files
 .DS_Store
+
+# Saved CI release artifacts
+release-artifact/
+release-images/

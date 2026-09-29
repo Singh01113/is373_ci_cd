@@ -1,74 +1,79 @@
-# CI/CD calculator demo
+# IS 373: application delivery
 
-A small FastAPI calculator that makes the path from a local edit to a tested production release visible. One HTML file calculates in JavaScript, verifies through Python, and shows whether the results agree.
+A small FastAPI calculator makes a tested release visible: the browser calculates in JavaScript, verifies through Python, and reports the running commit. Learn to test, build, publish, deploy, and roll back one application.
 
-**Implemented and rehearsed:** unit/integration/browser tests, Docker Hub publication, WUD automatic deployment, three deliberate test failures, and rollback/resume. See the [evidence record](docs/evidence.md) for actual runs, commits, digests, and timings.
+This repository owns **application code and delivery**. Its companion, [373_hosting](https://github.com/kaw393939/373_hosting), owns **Ubuntu, Docker installation, DNS, Traefik, and public HTTPS**. Each works independently; together they provide the complete course.
 
-## Run the demo
+| Your goal | Start here |
+|---|---|
+| Run the calculator locally | Quick start below |
+| Learn unit, integration, and browser testing | [Testing](docs/testing.md) |
+| Understand tested multi-platform releases | [CI/CD](docs/ci-cd.md) |
+| Put the published application behind HTTPS | [Hosting handoff](docs/hosting.md) |
+| Rehearse failed tests and rollback | [Demo runbook](docs/demo.md) |
+| Change the project | [Contributing](CONTRIBUTING.md) and [specification](docs/spec.md) |
+| Inspect previous demonstrations | [Evidence](docs/evidence.md) and [QA](docs/qa.md) |
 
-Prerequisites: Docker Desktop with ARM64 Linux containers, Git, `make`, and a bootstrap `python3` with pip. Python 3.13.15 and uv 0.12.15 install locally inside ignored `.tools/`; no global Python replacement is required. This initial image targets **linux/arm64**, matching the verified Mac and GitHub runner.
+## Quick start: local development
+
+Prerequisites: Docker with Linux containers, Git, `make`, and a bootstrap Python 3 with pip. Python 3.13.15, uv, and test dependencies install inside this repository's ignored tool directories.
 
 ```sh
-git clone git@github.com:kaw393939/is373_ci_cd.git
+git clone https://github.com/kaw393939/is373_ci_cd.git
 cd is373_ci_cd
 make setup
 make browsers
-make up
+make dev
 ```
 
-`make up` builds the source-mounted development container, pulls the published production image, and starts WUD. You can use `make dev` before the first image is published in a new fork.
+Open [localhost:8080](http://localhost:8080). Development starts without a published image. Once the first passing release has reached Docker Hub, `make up` also starts production and the updater.
 
-| Service | Default address | Behavior |
-| --- | --- | --- |
-| Development | [localhost:8080](http://localhost:8080) | Mounted local source with reload |
-| Production | [localhost:8090](http://localhost:8090) | Last passing image from Docker Hub |
-| WUD dashboard | [localhost:8091](http://localhost:8091) | Authenticated image monitoring and updates |
+| Service | Local address | Purpose |
+|---|---|---|
+| Development | `http://localhost:8080` | Source-mounted reload |
+| Production | `http://localhost:8090` | Published image, no source mount |
+| WUD | `http://localhost:8091` | Authenticated updater, accessible only through loopback |
 
-WUD login: username `admin`; open local `.state/wud.env` for the generated password. That file is ignored and restricted to its owner. Use `make check-updates` to request a registry check without opening the dashboard.
+`make up` generates WUD credentials in ignored `.state/wud.env`; open the file locally when you need its dashboard. For an occupied development port, copy `.env.example` to `.env` and set `DEV_PORT`.
 
-The local port conflict is resolved: development runs on `8080`. The previous Apache container was stopped with the owner's permission and retained intact ([#19](https://github.com/kaw393939/is373_ci_cd/issues/19)). For a different machine with an occupied port, copy `.env.example` to ignored `.env` and set `DEV_PORT`.
-
-## Test and operate
+## Test and release
 
 ```sh
-make test-unit          # Pure Python arithmetic and release guards
-make test-integration   # Real FastAPI request/response contracts
-make build             # Build the release image once
-make test-e2e          # Chromium against that image on isolated port 18090
-make status            # Running services and production release
-make check-updates     # Ask WUD to check the registry now
-make down              # Stop this project's services; keep WUD data
+make test-unit
+make test-integration
+make build
+make test-e2e
 ```
 
-Failed browser tests retain traces/screenshots under `artifacts/playwright`; CI uploads them for seven days. Local `make test-e2e` removes its temporary container even on failure. The release image has no browser or test packages.
-
-For rollback and resumption, use the [demo runbook](docs/demo.md). The Make commands preserve local rollback state; bare `docker compose up` does not read that state automatically.
-
-## Delivery flow
+Local builds default to the Docker daemon's architecture; `BUILD_PLATFORM=linux/amd64` or `linux/arm64` can select another supported target if your builder can run it. CI uses native AMD64 and ARM64 runners. Each builds once and browser-tests that exact image. After both pass, a `main` push publishes their saved artifacts as one multi-platform release, without rebuilding. Pull requests and manual runs do not publish.
 
 ```mermaid
 flowchart LR
-    edit[Local edit / :8080] --> pr[Issue-linked PR]
-    pr --> checks[Unit → integration → build → E2E]
-    checks --> merge[Merge passing PR]
-    merge --> verify[Verify main release]
-    verify --> hub[Publish exact tested image]
-    hub --> wud[WUD detects prod digest change]
-    wud --> prod[Production / :8090]
+    edit[Application change] --> test[Native AMD64 and ARM64 tests]
+    test --> artifacts[Exact tested image artifacts]
+    artifacts --> hub[Docker Hub multi-platform release]
+    hub --> wud[WUD updates only this application]
+    wud --> prod[Production]
+    prod --> health[Verify running commit and image]
 ```
 
-Only a passing `main` push publishes. PRs and manual verification never publish. Each release receives a `sha-<full-commit>` tag and the mutable `prod` channel. Production health and the page footer identify what actually deployed; a green publishing run alone is not deployment evidence.
+Each release has a `sha-<full-commit>` tag and a moving `prod` channel. Older releases from the original demo are ARM64-only. Choose a new compatible release when rolling back an AMD64 server.
 
-Observed examples: first verification 58 seconds, first publication job 90 seconds, cached publication job 56 seconds, automatic update about 39 seconds after publication. These are recorded observations, not timing guarantees.
+## Operate
 
-## Specifications and development
+```sh
+make deploy             # Production + updater only; no development build
+make verify-production  # Compare actual container image ID and health identity
+make status
+make check-updates
+make rollback RELEASE=sha-FULL_40_CHARACTER_COMMIT
+make resume-updates
+```
 
-- [Product specification](docs/spec.md): numbered requirements and HTTP contract.
-- [Architecture](docs/architecture.md): components, runtime decisions, and adaptation.
-- [Testing strategy](docs/testing.md): the three boundaries and failure evidence.
-- [CI/CD specification](docs/ci-cd.md): gates, versioning, publication, and rollback.
-- [Implementation plan](docs/implementation-plan.md): issue history and dependencies.
-- [Demo runbook](docs/demo.md), [evidence](docs/evidence.md), and [final QA report](docs/qa.md).
-- [Contributing](CONTRIBUTING.md), [AI instructions](AGENTS.md), and [GitHub policy](docs/github-workflow.md).
+Use the Make commands so persisted rollback state and a local `compose.override.yaml` remain in effect. `make down` stops only this Compose project and retains updater data. [The hosting handoff](docs/hosting.md) explains the optional override and public verification. A green publishing workflow is not proof that a remote server updated.
 
-[Issues](https://github.com/kaw393939/is373_ci_cd/issues) · [Milestone](https://github.com/kaw393939/is373_ci_cd/milestone/1) · [Actions](https://github.com/kaw393939/is373_ci_cd/actions) · [Commit history](https://github.com/kaw393939/is373_ci_cd/commits/main/)
+## Boundaries
+
+No DNS credentials, Traefik installation, public firewall changes, or TLS certificate store belong here. No application source or duplicate publishing workflow belongs in the hosting repository. The integration contract is an OCI image, container port `8000`, `/health` release identity, and an optional external network/Host-rule overlay.
+
+The original single-architecture demo has recorded publication, update, failure, and rollback evidence. New multi-platform and integration validation is recorded separately in [integration evidence](docs/integration-evidence.md); a proposed exercise is not a claimed deployment.

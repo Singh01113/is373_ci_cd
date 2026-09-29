@@ -1,6 +1,6 @@
 # Demonstration runbook
 
-This procedure has been rehearsed. See [evidence](evidence.md) for actual workflow runs and release identities. Run commands from the repository root and keep Docker Desktop/the host awake during the demonstration.
+The original ARM64 procedure has been rehearsed. New native multi-platform release and public-hosting evidence is tracked separately in [integration evidence](integration-evidence.md). See [evidence](evidence.md) for actual workflow runs and release identities. Run commands from the repository root and keep Docker Desktop/the host awake during the demonstration.
 
 ## Preparation
 
@@ -83,7 +83,7 @@ Rerunning an older successful `main` workflow is not a rollback command. The pub
 
 ## 5. Roll back and resume
 
-The following known-good version was used in the rehearsal:
+The following ARM64-only version was used in the original rehearsal. On AMD64 choose a known-good multi-platform release instead:
 
 ```sh
 make rollback RELEASE=sha-057cde2beaf9a3a5100e57936f2cb4be42fa1a6d

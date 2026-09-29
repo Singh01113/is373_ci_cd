@@ -1,6 +1,6 @@
 # Product specification
 
-Status: implemented contract for version 1. Requirement IDs are stable references for issues, tests, and pull requests. Proposed defaults below may be changed through a documented specification update.
+Status: version 1 contract plus the complementary-hosting extension. Requirement IDs are stable references for issues, tests, and pull requests. Proposed defaults below may be changed through a documented specification update.
 
 ## Goal and scope
 
@@ -110,3 +110,13 @@ Health response (illustrative values):
 - **DEV-02:** Commands expose stable development/test/build interfaces so another framework can reuse the delivery pattern.
 
 See [testing](testing.md) for coverage, [CI/CD](ci-cd.md) for delivery details, and [implementation plan](implementation-plan.md) for completion gates.
+
+## Complementary hosting extension (issue #28)
+
+- **DEL-07:** Native AMD64 and ARM64 artifacts each pass unit, integration, and real-browser tests before either can enter the multi-platform production index. Publication loads tested artifacts without rebuilding.
+- **DEL-08:** A stable `verify` check gates both native jobs. Only current-main pushes can publish; PRs/manual runs cannot.
+- **OPS-03:** All Compose lifecycle operations load an optional local override. Production-only deployment does not build/start development, and rollback preserves the hosting network and labels through that override.
+- **OPS-04:** Persisted release selections override inherited `PROD_IMAGE`; verification compares actual container image identity and the expected health commit/environment.
+- **DOC-01:** The hosting companion owns DNS, TLS, firewall, proxy, and its routing overlay; this repository owns the app and delivery. Cross-links describe the handoff without duplicating either source of truth.
+
+Acceptance: both native PR checks pass; rendered Compose retains overrides and loopback ports; regression tests cover conflicting release selection; a production publication records both platform digests and the index. A new public deployment/rollback rehearsal must be recorded separately before claiming it occurred.

@@ -32,12 +32,23 @@ def output(args):
         raise
 
 
-def compose(*args):
+def compose(*args, capture_output=False):
     cmd = ["docker", "compose"]
     for path in (ROOT / ".env", STATE / "release.env"):
         if path.exists():
             cmd += ["--env-file", str(path)]
-    return run(cmd + ["-f", str(ROOT / "compose.yaml"), *args])
+    cmd += ["-f", str(ROOT / "compose.yaml")]
+    override = ROOT / "compose.override.yaml"
+    if override.exists():
+        cmd += ["-f", str(override)]
+    environment = os.environ.copy()
+    # A persisted rollback/resume selection must beat an inherited shell value.
+    selected = STATE / "release.env"
+    if selected.exists():
+        values = dict(line.split("=", 1) for line in selected.read_text().splitlines()
+                      if line and not line.startswith("#"))
+        environment["PROD_IMAGE"] = values["PROD_IMAGE"]
+    return run(cmd + list(args), env=environment, capture_output=capture_output)
 
 
 def wait_for_health(url, timeout=30):
@@ -59,7 +70,14 @@ def build():
     if output(["git", "status", "--porcelain"]):
         commit += "-dirty"
     built_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    run(["docker", "buildx", "build", "--load", "--platform", "linux/arm64",
+    target = os.getenv("BUILD_PLATFORM")
+    if not target:
+        architecture = output(["docker", "info", "--format", "{{.Architecture}}"])
+        architecture = {"aarch64": "arm64", "x86_64": "amd64"}.get(architecture, architecture)
+        target = "linux/" + architecture
+    if target not in ("linux/amd64", "linux/arm64"):
+        raise ValueError("BUILD_PLATFORM must be linux/amd64 or linux/arm64")
+    run(["docker", "buildx", "build", "--load", "--platform", target,
          "--build-arg", f"COMMIT_SHA={commit}", "--build-arg", f"BUILT_AT={built_at}",
          "--tag", IMAGE, "."])
 
@@ -83,7 +101,9 @@ def test_e2e():
         if health["commit"] != expected_commit:
             raise RuntimeError("Health release identity does not match the built image")
         run(["make", "test-browser", f"BASE_URL=http://127.0.0.1:{port}"], timeout=180)
-        record.write_text(json.dumps({"image_id": image_id, "commit": expected_commit, "health": health}, indent=2))
+        record.write_text(json.dumps({"image_id": image_id, "commit": expected_commit,
+                                      "architecture": image["Architecture"], "os": image["Os"],
+                                      "health": health}, indent=2))
         print(f"Verified image {image_id} at commit {expected_commit}", flush=True)
     except subprocess.CalledProcessError as error:
         startup_error = (error.stdout or "") + (error.stderr or "")
@@ -122,11 +142,36 @@ def select_release(reference):
 
 
 def verify_production(reference):
-    expected = output(["docker", "image", "inspect", reference, "--format", '{{index .Config.Labels "org.opencontainers.image.revision"}}'])
+    image = json.loads(output(["docker", "image", "inspect", reference]))[0]
+    container_id = compose("ps", "-q", "prod", capture_output=True).stdout.strip()
+    if not container_id:
+        raise RuntimeError("Production container is not running")
+    running = output(["docker", "inspect", container_id, "--format", "{{.Image}}"])
+    if running != image["Id"]:
+        raise RuntimeError("Production container is not running the selected image ID")
+    expected = image["Config"]["Labels"]["org.opencontainers.image.revision"]
     health = wait_for_health("http://127.0.0.1:8090/health")
     if health["commit"] != expected or health["environment"] != "production":
         raise RuntimeError("Production health does not identify the selected release")
     print(json.dumps(health, indent=2))
+
+
+def production_reference():
+    # Render privately: the full model may contain updater credentials.
+    model = json.loads(compose("config", "--format", "json", capture_output=True).stdout)
+    return model["services"]["prod"]["image"]
+
+
+def deploy(include_dev=False):
+    initialize_updater()
+    compose("pull", "prod")
+    if include_dev:
+        compose("up", "-d", "--build", "dev", "prod")
+    else:
+        compose("up", "-d", "--no-deps", "prod")
+    verify_production(production_reference())
+    if not (STATE / "updates-paused").exists():
+        compose("up", "-d", "wud")
 
 
 def rollback():
@@ -177,12 +222,11 @@ def main():
     elif command == "dev":
         compose("up", "-d", "--build", "dev")
     elif command == "up":
-        initialize_updater()
-        compose("pull", "prod")
-        compose("up", "-d", "--build", "dev", "prod")
-        if not (STATE / "updates-paused").exists():
-            compose("up", "-d", "wud")
-        print(json.dumps(wait_for_health("http://127.0.0.1:8090/health"), indent=2))
+        deploy(include_dev=True)
+    elif command == "deploy":
+        deploy()
+    elif command == "verify-production":
+        verify_production(production_reference())
     elif command == "down":
         compose("down")
     elif command == "rollback":
