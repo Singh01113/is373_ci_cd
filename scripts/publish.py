@@ -1,4 +1,4 @@
-"""Promote only the exact verified image from a current main push."""
+"""Publish two native-tested artifacts, then promote their multi-platform index."""
 
 import json
 import os
@@ -7,6 +7,9 @@ import re
 import subprocess
 import urllib.error
 import urllib.request
+
+REPOSITORY = "kaw393939/is373_ci_cd"
+ARCHITECTURES = ("amd64", "arm64")
 
 
 def output(args):
@@ -34,37 +37,70 @@ def tag_exists(repository, tag):
         raise  # A network/auth failure is not evidence that a tag is absent.
 
 
+def validate_artifact(architecture, tested, image, commit):
+    if architecture not in ARCHITECTURES:
+        raise ValueError("Unexpected release architecture")
+    if tested.get("architecture") != architecture or tested.get("os") != "linux":
+        raise ValueError("Test evidence has the wrong platform")
+    if image.get("Architecture") != architecture or image.get("Os") != "linux":
+        raise ValueError("Loaded image has the wrong platform")
+    if image.get("Id") != tested.get("image_id") or tested.get("commit") != commit:
+        raise ValueError("Loaded artifact is not the tested commit/image")
+    if image.get("Config", {}).get("Labels", {}).get("org.opencontainers.image.revision") != commit:
+        raise ValueError("Image release label does not match the commit")
+
+
 def main():
-    image = os.environ["IMAGE"]
-    repo = "kaw393939/is373_ci_cd"
     commit = os.environ["GITHUB_SHA"]
-    tested = json.loads(Path(".state/tested-image.json").read_text())
-    image_id = output(["docker", "image", "inspect", image, "--format", "{{.Id}}"])
     github_repo = os.environ["GITHUB_REPOSITORY"]
+    artifacts = Path(os.getenv("RELEASE_DIR", "release-images"))
+    releases = {}
+    # Validate all artifacts before pushing any tags. docker load does not rebuild.
+    for architecture in ARCHITECTURES:
+        folder = artifacts / ("release-" + architecture)
+        tested = json.loads((folder / "tested-image.json").read_text())
+        subprocess.run(["docker", "load", "-i", str(folder / "image.tar")], check=True)
+        image = json.loads(output(["docker", "image", "inspect", tested["image_id"]]))[0]
+        validate_artifact(architecture, tested, image, commit)
+        releases[architecture] = tested
 
     def check_current():
         head = output(["gh", "api", f"repos/{github_repo}/git/ref/heads/main", "--jq", ".object.sha"])
-        validate_release(os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"], commit, head, tested, image_id)
+        for tested in releases.values():
+            validate_release(os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"],
+                             commit, head, tested, tested["image_id"])
 
     check_current()
     commit_tag = f"sha-{commit}"
-    if tag_exists(repo, commit_tag):
-        raise SystemExit("Commit tag already exists. Refusing to overwrite it on a rerun; create a new commit to release.")
+    tags = [commit_tag] + [f"{commit_tag}-{arch}" for arch in ARCHITECTURES]
+    if any(tag_exists(REPOSITORY, tag) for tag in tags):
+        raise SystemExit("A commit tag already exists. Refusing a full or partial release overwrite; use a new commit.")
 
-    def push(tag):
-        reference = f"{repo}:{tag}"
-        subprocess.run(["docker", "tag", image_id, reference], check=True)
+    sources = []
+    for architecture, tested in releases.items():
+        reference = f"{REPOSITORY}:{commit_tag}-{architecture}"
+        subprocess.run(["docker", "tag", tested["image_id"], reference], check=True)
         subprocess.run(["docker", "push", reference], check=True)
-        return reference
+        details = json.loads(output(["docker", "image", "inspect", reference]))[0]
+        digest = next(d for d in details["RepoDigests"] if d.startswith(REPOSITORY + "@"))
+        sources.append(digest)
+        tested["digest"] = digest
 
-    version = push(commit_tag)
-    check_current()  # Main may have advanced during the upload.
-    channel = push("prod")
-    details = json.loads(output(["docker", "image", "inspect", channel]))[0]
-    digest = next(d for d in details["RepoDigests"] if d.startswith(repo + "@"))
+    Path("artifacts").mkdir(exist_ok=True)
+    metadata = Path("artifacts/index.json")
+    version = f"{REPOSITORY}:{commit_tag}"
+    subprocess.run(["docker", "buildx", "imagetools", "create", "--tag", version,
+                    "--metadata-file", str(metadata), *sources], check=True)
+    digest = json.loads(metadata.read_text())["containerimage.descriptor"]["digest"]
+    reference = f"{REPOSITORY}@{digest}"
+    # No rebuild: prod becomes a copy of the immutable, two-platform index.
+    check_current()
+    channel = f"{REPOSITORY}:prod"
+    subprocess.run(["docker", "buildx", "imagetools", "create", "--tag", channel, reference], check=True)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-        summary.write(f"## Published release\n\n- Commit: `{commit}`\n- Version: `{version}`\n- Channel: `{channel}`\n- Digest: `{digest}`\n\nPublication is complete. Verify `/health` on port 8090 to confirm deployment.\n")
-    Path("artifacts/release.json").write_text(json.dumps({"commit": commit, "version": version, "digest": digest}, indent=2))
+        summary.write(f"## Published multi-platform release\n\n- Commit: `{commit}`\n- Version: `{version}`\n- Channel: `{channel}`\n- Index: `{reference}`\n\nBoth native artifacts passed E2E before publication. Verify the running `/health` commit separately.\n")
+    Path("artifacts/release.json").write_text(json.dumps(
+        {"commit": commit, "version": version, "digest": reference, "platforms": releases}, indent=2))
 
 
 if __name__ == "__main__":

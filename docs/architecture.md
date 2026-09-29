@@ -50,7 +50,7 @@ uv.lock                   # Pinned complete dependency graph
 | `prod` | `127.0.0.1:8090` → container `8000` | Docker Hub image | Recreated after a passing release |
 | `wud` | Optional `127.0.0.1:8091` dashboard | Pinned WUD image | Registry polling and production update |
 
-Loopback binding is the verified default for this local classroom demo. Remote/public access is outside v1. Production here means the release-built runtime. Map different host ports to the same internal application port.
+Loopback binding is the verified default for this local classroom demo. Public access is an optional companion-owned overlay; see [hosting handoff](hosting.md). Production here means the release-built runtime. Map different host ports to the same internal application port.
 
 One Compose file should support `make dev` before any production image exists, then `make up` once the first release is published. Development and production must not share a source-code volume. WUD needs Docker control access to recreate containers; mounting a Docker socket read-only does not make Docker API access read-only. Treat the updater as a privileged local component, keep its dashboard local, and do not expose the daemon over unauthenticated TCP.
 
@@ -75,7 +75,7 @@ WUD requires authentication. `make up` generates a random local admin password i
 
 - Deployment uses this Mac's Docker Desktop on `linux/arm64`, with services bound to loopback.
 - The GitHub repository and `kaw393939/is373_ci_cd` Docker Hub repository are public.
-- CI uses `ubuntu-24.04-arm` and publish a single `linux/arm64` image. This avoids emulation and tests the deployment architecture directly. AMD64 support is a future adaptation.
+- The initial demo used `ubuntu-24.04-arm` and a single ARM64 image. The current pipeline tests native AMD64 and ARM64 artifacts and publishes a combined index; see [CI/CD](ci-cd.md).
 - Python is `3.13.15`; uv `0.12.15` bootstraps locally under ignored `.tools/`, with the full dependency graph committed in `uv.lock`.
 - Python container base: `python:3.13.15-slim-bookworm`, pinned by digest in the Dockerfile.
 - WUD selected release: `9.0.2`, pinned by digest in Compose.
@@ -97,3 +97,7 @@ Keep the image publication, tags, registry credentials, WUD policy, issue workfl
 - [FastAPI container deployment](https://fastapi.tiangolo.com/deployment/docker/)
 - [WUD Docker Compose trigger](https://getwud.app/docs/configuration/triggers/docker-compose/)
 - [WUD watchers and digest monitoring](https://getwud.app/docs/configuration/watchers/)
+
+## Companion boundary
+
+The hosting repository owns the external proxy network and public Host-rule overlay. This repository owns app lifecycle and loads a local `compose.override.yaml` consistently. Local loopback ports remain 8080/8090/8091, and only production is attached to public routing. See [the contract](hosting.md).

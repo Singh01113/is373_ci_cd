@@ -41,6 +41,8 @@ These commands are implemented. Start with `make setup` and `make browsers` when
 | `make test-integration` | Run only in-process API integration tests |
 | `make build` | Build a release image with commit and build metadata; no publication |
 | `make test-e2e` | Test the already-built image in an isolated container; collect failures and clean up |
+| `make deploy` | Start only published production and WUD; honor pause state and local override |
+| `make verify-production` | Compare selected image ID with the actual container and health commit |
 | `make up` | Start dev, published prod, and WUD after bootstrap |
 | `make down` | Stop this project's Compose services without deleting unrelated resources |
 | `make rollback RELEASE=<sha-tag-or-digest>` | Pause updater and redeploy only prod to a known-good release |
@@ -57,3 +59,7 @@ Prerequisites and setup are in the README. `IMAGE` selects the locally built/tes
 - Every PR: state exact checks run and material checks not run. Never label planned validation as passed.
 
 Deliberate failure demonstrations belong on clearly named demo branches and should be documented. Do not leave a known broken release on `main` outside an explicitly coordinated failure demonstration.
+
+## Platform and hosting changes
+
+Keep the required `verify` check name. CI must test each supported platform before publishing its artifact. Use the companion-owned override described in [hosting](docs/hosting.md) instead of installing another Traefik here. Local `compose.override.yaml` is ignored and loaded by every lifecycle command.
