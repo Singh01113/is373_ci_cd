@@ -101,8 +101,10 @@ def test_e2e():
                                "-p", f"127.0.0.1:{port}:8000", "-e", "APP_ENV=test", image_id])
         health = wait_for_health(f"http://127.0.0.1:{port}/health")
         run(["docker", "exec", name, "python", "-c",
-             "import os; from pathlib import Path; "
+             "import os, importlib.util; from pathlib import Path; "
              "assert os.getuid() == 10001 and os.getgid() == 10001; "
+             "assert all(importlib.util.find_spec(module) is None "
+             "for module in ('pip', 'setuptools', 'ensurepip')); "
              "assert not os.access('/app/app/main.py', os.W_OK); "
              "status=Path('/proc/self/status').read_text(); "
              "assert 'NoNewPrivs:\\t1' in status; "

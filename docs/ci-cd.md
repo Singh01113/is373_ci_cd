@@ -53,6 +53,8 @@ Production's Compose service applies a read-only root filesystem, `cap_drop: [AL
 
 The application receives no Docker socket. WUD still has Docker control privileges and requires separate protection; a read-only socket mount would not remove those privileges. Host patching does not update packages inside pinned images: update the base digest and rebuild when scans identify a fix.
 
+Issue #34 replaces the Debian Bookworm base with a digest-pinned Python 3.13.15 Trixie image and applies available distro updates in a shared base stage. Runtime removes pip, setuptools, and ensurepip after dependencies are built, eliminating unneeded installation tooling and its vendored libraries. OS update repositories can change between builds; exact tested artifact publication preserves the release identity despite that variation. Review each native scan for the actual remediation result; no vulnerability suppression file is added.
+
 ## Recovery
 
 `make rollback RELEASE=sha-<full-commit>` or `RELEASE=sha256:<digest>` pauses WUD, persists the selected reference, pulls and recreates only production, and verifies the actual container image ID plus `/health` release identity. It leaves updates paused. Persisted release state overrides inherited shell `PROD_IMAGE`.
