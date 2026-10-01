@@ -1,0 +1,57 @@
+name: Deployed image security
+
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deployed-image-security
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Scan deployed release (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Identify the publicly deployed application release
+        id: release
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          with urllib.request.urlopen('https://calc.mywebclass.org/health', timeout=30) as response:
+              health = json.load(response)
+          commit = health.get('commit', '')
+          assert health.get('status') == 'ok' and health.get('environment') == 'production'
+          assert re.fullmatch(r'[0-9a-f]{40}', commit), 'Invalid deployed release identity'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f'commit={commit}\n')
+          print(f'Deployed commit: {commit}')
+          PY
+      - name: Pull the deployed release for the selected platform
+        env:
+          IMAGE: kaw393939/is373_ci_cd:sha-${{ steps.release.outputs.commit }}-${{ matrix.arch }}
+        run: docker pull --platform linux/${{ matrix.arch }} "$IMAGE"
+      - name: Install checksum-pinned image scanner
+        run: sh scripts/install-trivy.sh
+      - name: Scan deployed release (report-only policy)
+        env:
+          IMAGE: kaw393939/is373_ci_cd:sha-${{ steps.release.outputs.commit }}-${{ matrix.arch }}
+        run: python3 scripts/scan-image.py "$IMAGE" "artifacts/security-${{ matrix.arch }}"
+      - name: Retain scan reports and resolved image identity
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deployed-security-${{ matrix.arch }}-${{ github.run_id }}
+          path: artifacts/security-*/
+          if-no-files-found: warn
+          retention-days: 14

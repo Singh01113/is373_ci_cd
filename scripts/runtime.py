@@ -96,8 +96,17 @@ def test_e2e():
     startup_error = ""
     try:
         container_id = output(["docker", "run", "-d", "--name", name,
+                               "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
+                               "--pids-limit=128", "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777",
                                "-p", f"127.0.0.1:{port}:8000", "-e", "APP_ENV=test", image_id])
         health = wait_for_health(f"http://127.0.0.1:{port}/health")
+        run(["docker", "exec", name, "python", "-c",
+             "import os; from pathlib import Path; "
+             "assert os.getuid() == 10001 and os.getgid() == 10001; "
+             "assert not os.access('/app/app/main.py', os.W_OK); "
+             "status=Path('/proc/self/status').read_text(); "
+             "assert 'NoNewPrivs:\\t1' in status; "
+             "assert 'CapEff:\\t0000000000000000' in status"])
         if health["commit"] != expected_commit:
             raise RuntimeError("Health release identity does not match the built image")
         run(["make", "test-browser", f"BASE_URL=http://127.0.0.1:{port}"], timeout=180)
