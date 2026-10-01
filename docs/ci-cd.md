@@ -6,7 +6,7 @@ The original ARM64 demo is recorded in [evidence](evidence.md). The current pipe
 
 1. Two native jobs (`ubuntu-24.04` for AMD64 and `ubuntu-24.04-arm` for ARM64) install locked dependencies and run unit/integration tests.
 2. Each builds one release image with the exact Git commit and build timestamp, then runs Chromium E2E against that image on isolated port 18090.
-3. Each exports that image with `docker save` and records its image ID, architecture, OS, and tested commit. The image archive is not rebuilt in publication.
+3. Each vulnerability-scans that exact image, then exports it with `docker save` and records its image ID, architecture, OS, and tested commit. The image archive is not rebuilt in publication.
 4. The stable required check `verify` fails unless both jobs succeeded. Existing branch protection continues to require this name.
 5. Only a successful push to current `main` authenticates to Docker Hub. The publisher loads both archives, compares them with their test evidence and embedded release labels, and checks that main has not advanced.
 6. It pushes immutable-by-convention platform tags, creates one multi-platform commit index from their registry digests, rechecks main, and copies that index to `prod`.
@@ -42,6 +42,16 @@ WUD polls the digest behind `prod`, filters candidates to that tag, and updates 
 `make deploy` pulls the selected published image, starts production without development, checks its actual image/health identity, and starts WUD unless a pause marker exists. `make up` additionally builds/starts development. Every lifecycle command includes an optional local `compose.override.yaml`.
 
 WUD polls outward, so there is no server SSH credential in GitHub Actions. Private registry deployments need separate read credentials for host pulls and updater checks. A GitHub publishing secret does not configure the host automatically.
+
+## Security scanning and runtime restrictions
+
+Trivy 0.75.0 is downloaded from its official release with separate pinned SHA-256 checksums for AMD64 and ARM64. No floating scanner action or installation script is executed. Each native test job scans OS and language packages in the exact tested image, saving `artifacts/security-<arch>/vulnerabilities.json`, `image-identity.json`, and a severity summary. Scanner errors fail the job; vulnerability findings initially produce reports and HIGH/CRITICAL warnings rather than blocking publication. Review the baseline before choosing a severity gate; a successful scan is not evidence that an image has no vulnerabilities.
+
+The **Deployed image security** workflow runs daily at 07:30 UTC (03:30 Eastern during daylight time, 02:30 during standard time) and supports manual dispatch. GitHub schedules may be delayed. It reads the public `/health` commit and scans both platform release tags, recording resolved image identities. This relies on the project's immutable-tag convention and does not inspect the host's actual Docker image ID. Reports are retained for 14 days; findings appear in the run summary. No external notification service is configured.
+
+Production's Compose service applies a read-only root filesystem, `cap_drop: [ALL]`, `no-new-privileges`, a process limit, and bounded `/tmp`. CI's browser container uses those same restrictions and checks UID/GID 10001, root-owned application code, zero effective capabilities, and `NoNewPrivs`. Deploy these Compose settings on the host through the normal Make interface: publishing a new image alone does not apply changed Compose settings to an existing host checkout.
+
+The application receives no Docker socket. WUD still has Docker control privileges and requires separate protection; a read-only socket mount would not remove those privileges. Host patching does not update packages inside pinned images: update the base digest and rebuild when scans identify a fix.
 
 ## Recovery
 

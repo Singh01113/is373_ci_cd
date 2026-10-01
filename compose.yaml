@@ -18,6 +18,13 @@ services:
 
   prod:
     image: ${PROD_IMAGE:-kaw393939/is373_ci_cd:prod}
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
     ports:
       - "127.0.0.1:8090:8000"
     environment:

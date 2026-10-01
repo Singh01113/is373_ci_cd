@@ -120,3 +120,8 @@ See [testing](testing.md) for coverage, [CI/CD](ci-cd.md) for delivery details, 
 - **DOC-01:** The hosting companion owns DNS, TLS, firewall, proxy, and its routing overlay; this repository owns the app and delivery. Cross-links describe the handoff without duplicating either source of truth.
 
 Acceptance: both native PR checks pass; rendered Compose retains overrides and loopback ports; regression tests cover conflicting release selection; a production publication records both platform digests and the index. A new public deployment/rollback rehearsal must be recorded separately before claiming it occurred.
+
+## Image security (issue #32)
+
+- **SEC-01:** Scan each exact tested native image with a version/checksum-pinned vulnerability scanner before exporting it for publication. Retain JSON findings, severity counts, and image/commit identity. Initial policy reports all findings for review; scanner execution failures fail verification. A daily/manual workflow rescans both platform images of the release identified by the public health endpoint. Registry tags are immutable by convention; record their resolved digests, and do not claim this validates host runtime state.
+- **SEC-02:** The web server runs as UID/GID `10001:10001` with no login shell or home directory. Application files and dependencies remain owned by root. Production uses a read-only filesystem, drops all Linux capabilities, prohibits new privileges, limits processes to 128, and provides only a 64 MiB temporary filesystem for temporary writes. Container browser checks use these restrictions and verify user identity, effective capabilities, and privilege restrictions. The server omits its version header.
