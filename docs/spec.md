@@ -47,7 +47,7 @@ Compare numeric values before formatting. Display up to ten significant digits, 
 
 ### UI-01 — One accessible HTML file
 
-Serve one HTML file at `/`, containing the page markup, CSS, and JavaScript. Use standard browser APIs, with no CDN or frontend build step. Associate labels with controls, use keyboard-accessible inputs, and announce results/errors with a live region. Status must use words, not color alone. The page must remain usable on a narrow viewport.
+Serve one HTML file at `/`, containing the page markup, CSS, and JavaScript. The browser title, primary heading, and calculator section heading read **IS373 Content Management System** (issue #30); calculator behavior is unchanged. Use standard browser APIs, with no CDN or frontend build step. Associate labels with controls, use keyboard-accessible inputs, and announce results/errors with a live region. Status must use words, not color alone. The page must remain usable on a narrow viewport.
 
 ### OPS-01 — Release identity
 
